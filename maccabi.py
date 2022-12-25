@@ -161,8 +161,9 @@ avail_appoint_time = avail_appoint_time_parent.find_element(By.CSS_SELECTOR, 'bu
 first_avail_appoint = datetime.strptime(avail_appoint.text[-8:] + ' ' + avail_appoint_time, '%d/%m/%y %H:%M')
 
 if first_avail_appoint < cur_appoint:
-    print('Yay, found earlier appointment at', first_avail_appoint)
-    send_telegram_message(message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint}')
+    message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint}'
+    logger.info(message)
+    send_telegram_message(message=message)
 else:
     message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint}'
     logger.info(message)
