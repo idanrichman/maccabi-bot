@@ -1,5 +1,6 @@
 delay_secs_short: 1
 delay_secs_long: 1
+max_minutes_wait: 5
 chat_id: 0
 api_key: ''
 user_id: ''
