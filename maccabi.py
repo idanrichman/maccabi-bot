@@ -10,20 +10,32 @@ import json
 import yaml
 import logging
 from logging.handlers import RotatingFileHandler
+import random
 
+# Setup logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 handler = RotatingFileHandler('maccabi.log', maxBytes=10*1e6, backupCount=1)
 handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s', 
+                                   datefmt="%Y-%m-%d %H:%M:%S")
+handler.setFormatter(file_formatter)
 logger.addHandler(handler)
 
+# Load config
 with open("config.yaml", 'r') as stream:
     config = yaml.load(stream, yaml.SafeLoader)
 
-
 delay_secs_short = config['delay_secs_short']
 delay_secs_long = config['delay_secs_long']
+max_minutes_wait = config['max_minutes_wait']
 
+# random waiting
+n_mins = random.randint(0, max_minutes_wait)
+logger.info('Waiting for %i minutes', n_mins)
+time.sleep(n_mins*60)
 
+# Define telegram helper
 def send_telegram_message(message: str,
                           chat_id: str = config['chat_id'],
                           api_key: str = config['api_key'],
@@ -46,47 +58,67 @@ def send_telegram_message(message: str,
     return response
 
 
+def find_element(phase, driver, by, value):
+# Wrapper for driver.find_element
+    try:
+        element = driver.find_element(by, value)
+    except NoSuchElementException as e:
+        logger.error("Failed finding element at phase %s. %s", phase, e.msg)
+        raise
+    return element
+
+
+def optional_find_element(phase, driver, by, value):
+# Wrapper for driver.find_element, but won't raise error if not found
+    try:
+        element = driver.find_element(by, value)
+        return element
+    except NoSuchElementException as e:
+        logger.debug("Failed finding element at phase %s. %s", phase, e.msg)
+    
+
+# Setup chrome driver
 chrome_options = webdriver.ChromeOptions()
 chrome_options.headless = False
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
                           options=chrome_options)
 driver.implicitly_wait(time_to_wait=10)  # retry seconds when searching for elements
 
+
 # Open the login page
 driver.get('https://online.maccabi4u.co.il/')
 time.sleep(delay_secs_short)
-driver.find_element(By.LINK_TEXT, 'כניסה עם סיסמה').click()
+find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה').click()
 
 # Find the username and password input fields and enter the login credentials
 time.sleep(delay_secs_short)
-username_field = driver.find_element(By.ID, 'identifyWithPasswordCitizenId')
+username_field = find_element('login user_id field', driver, By.ID, 'identifyWithPasswordCitizenId')
 username_field.send_keys(config['user_id'])
-
 time.sleep(delay_secs_short)
-password_field = driver.find_element(By.ID, 'password')
+password_field = find_element('login password field', driver, By.ID, 'password')
 password_field.send_keys(config['password'])
 
 # Find the login button and click it to log in
 time.sleep(delay_secs_short)
-login_button = driver.find_element(By.CLASS_NAME, 'validatePassword')
+login_button = find_element('login button', driver, By.CLASS_NAME, 'validatePassword')
 login_button.click()
 
 # click the "choose person"
 time.sleep(delay_secs_long)
-driver.find_element(By.CLASS_NAME, 'mr-lg-4').click()
+find_element('choose person button', driver, By.CLASS_NAME, 'mr-lg-4').click()
 
 # click on the person itself by ID number
 time.sleep(delay_secs_short)
 patient_name = config['patient_name']
 patient_id = config['patient_id']
-driver.find_element(By.XPATH, f'//div[text()="{patient_id}"]').click()
+find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]').click()
 
 time.sleep(delay_secs_long)
-driver.find_element(By.XPATH, '//a[text()="תורים עתידיים"]').click()
+find_element('future appointments button', driver, By.XPATH, '//a[text()="תורים עתידיים"]').click()
 
 time.sleep(delay_secs_short)
 doctor_name = config['doctor_name']
-driver.find_element(By.XPATH, f'//*[contains(text(), "{doctor_name}")]').click()
+find_element('choose by doctor name', driver, By.XPATH, f'//*[contains(text(), "{doctor_name}")]').click()
 
 #check current appointment date
 time.sleep(delay_secs_long)
@@ -98,29 +130,32 @@ for div in driver.find_elements(By.CLASS_NAME, 'AppointmentInfoDetails__text___H
     if 'שעה ' in div.text:
         cur_appoint_time = div.text[-5:] 
 
-assert (cur_appoint_date is not None) & (cur_appoint_time is not None), "couldn't find current date&time"
+if (cur_appoint_date is None) | (cur_appoint_time is None):
+    logger.error("Couldn't find current appointment date or time") 
+    raise
 cur_appoint = datetime.strptime(cur_appoint_date+' '+cur_appoint_time, '%d/%m/%y %H:%M')
 
 
 time.sleep(delay_secs_long)
-driver.find_element(By.XPATH, '//button[text()="עריכת תור"]').click()
+find_element('edit appointment button', driver, By.XPATH, '//button[text()="עריכת תור"]').click()
 
 time.sleep(delay_secs_long)
-driver.find_element(By.XPATH, '//button[text()="ביקור רגיל"]').click()
+regular_visit_button = optional_find_element('regular visit button', driver, By.XPATH, '//button[text()="ביקור רגיל"]')
+if regular_visit_button is not None:
+    regular_visit_button.click()
 
 time.sleep(delay_secs_short)
-try:
-    continue_button = driver.find_element(By.XPATH, '//button[text()="המשך להצגת תורים פנויים"]').click()
-except NoSuchElementException:
-    print("didn't need to press 'continue to show appointments'")
-    pass
+continue_button = optional_find_element('show available slots button', driver, By.XPATH, '//button[text()="המשך להצגת תורים פנויים"]')
+if continue_button is not None:
+    continue_button.click()
+
     
 #check first available date
 time.sleep(delay_secs_long)
-avail_appoint = driver.find_element(By.CLASS_NAME, 'TimeSelect__availableForDateTitleTimeSelect___uXc0W')
+avail_appoint = find_element('find first available date', driver, By.CLASS_NAME, 'TimeSelect__availableForDateTitleTimeSelect___uXc0W')
 first_avail_date = datetime.strptime(avail_appoint.text[-8:], '%d/%m/%y')
 
-avail_appoint_time_parent = driver.find_element(By.CLASS_NAME, 'RoundButtonPicker-module__scrolable___V9aPR')
+avail_appoint_time_parent = find_element('find first available time', driver, By.CLASS_NAME, 'RoundButtonPicker-module__scrolable___V9aPR')
 avail_appoint_time = avail_appoint_time_parent.find_element(By.CSS_SELECTOR, 'button').text
 
 first_avail_appoint = datetime.strptime(avail_appoint.text[-8:] + ' ' + avail_appoint_time, '%d/%m/%y %H:%M')
@@ -130,7 +165,7 @@ if first_avail_appoint < cur_appoint:
     send_telegram_message(message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint}')
 else:
     message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint}'
-    logging.debug(message)
+    logger.info(message)
     #send_telegram_message(message=message)
 
 # Close the browser
