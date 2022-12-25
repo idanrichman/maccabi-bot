@@ -1,0 +1,10 @@
+delay_secs_short: 1
+delay_secs_long: 1
+chat_id: 0
+api_key: ''
+user_id: ''
+password: ''
+
+patient_name: ''
+patient_id: ''
+doctor_name: ''
