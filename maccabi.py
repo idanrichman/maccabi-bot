@@ -88,24 +88,31 @@ driver.implicitly_wait(time_to_wait=10)  # retry seconds when searching for elem
 # Open the login page
 driver.get('https://online.maccabi4u.co.il/')
 time.sleep(delay_secs_short)
+username_field = find_element('login user_id field', driver, By.ID, 'idNumber')
+username_field.send_keys(config['user_id'])
+time.sleep(delay_secs_short)
+id_enter_button = find_element('id login continue button', driver, By.ID, 'chooseTypeBtn')
+id_enter_button.click()
+
+time.sleep(delay_secs_short)
 find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה').click()
 
 # Find the username and password input fields and enter the login credentials
 time.sleep(delay_secs_short)
-username_field = find_element('login user_id field', driver, By.ID, 'identifyWithPasswordCitizenId')
+username_field = find_element('login user_id field', driver, By.ID, 'idNumber2')
 username_field.send_keys(config['user_id'])
-time.sleep(delay_secs_short)
 password_field = find_element('login password field', driver, By.ID, 'password')
 password_field.send_keys(config['password'])
 
 # Find the login button and click it to log in
 time.sleep(delay_secs_short)
-login_button = find_element('login button', driver, By.CLASS_NAME, 'validatePassword')
+login_button = find_element('password login continue button', driver, By.ID, 'enterWithPasswordBtn')
 login_button.click()
+
 
 # click the "choose person"
 time.sleep(delay_secs_long)
-find_element('choose person button', driver, By.CLASS_NAME, 'mr-lg-4').click()
+find_element('choose person button', driver, By.CLASS_NAME, 'me-lg-4').click()
 
 # click on the person itself by ID number
 time.sleep(delay_secs_short)
@@ -114,17 +121,19 @@ patient_id = config['patient_id']
 find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]').click()
 
 time.sleep(delay_secs_long)
-find_element('future appointments button', driver, By.XPATH, '//a[text()="תורים עתידיים"]').click()
+future_appt_btn = find_element('future appointments button', driver, By.XPATH, '//a[contains(text(), "תורים עתידיים")]')
+driver.execute_script("arguments[0].click();", future_appt_btn)
 
 time.sleep(delay_secs_short)
 doctor_name = config['doctor_name']
-find_element('choose by doctor name', driver, By.XPATH, f'//*[contains(text(), "{doctor_name}")]').click()
+doctor_box = find_element('choose by doctor name', driver, By.XPATH, f'//div[@role="listitem" and .//a[contains(text(), "{doctor_name}")]]')
+driver.execute_script("arguments[0].click();", doctor_box)
 
 #check current appointment date
 time.sleep(delay_secs_long)
 cur_appoint_date = None
 cur_appoint_time = None
-for div in driver.find_elements(By.CLASS_NAME, 'AppointmentInfoDetails__text___H9zHc'):
+for div in driver.find_elements(By.CLASS_NAME, 'src-components-FutureAppointments-AppointmentInfoDetails-AppointmentInfoDetails__text___ohiP1'):
     if 'יום ' in div.text:
         cur_appoint_date = div.text[-8:]
     if 'שעה ' in div.text:
@@ -137,7 +146,7 @@ cur_appoint = datetime.strptime(cur_appoint_date+' '+cur_appoint_time, '%d/%m/%y
 
 
 time.sleep(delay_secs_long)
-find_element('edit appointment button', driver, By.XPATH, '//button[text()="עריכת תור"]').click()
+find_element('edit appointment button', driver, By.XPATH, '//button[text()="שינוי תור"]').click()
 
 time.sleep(delay_secs_long)
 regular_visit_button = optional_find_element('regular visit button', driver, By.XPATH, '//button[text()="ביקור רגיל"]')
@@ -152,20 +161,21 @@ if continue_button is not None:
     
 #check first available date
 time.sleep(delay_secs_long)
-avail_appoint = find_element('find first available date', driver, By.CLASS_NAME, 'TimeSelect__availableForDateTitleTimeSelect___uXc0W')
+avail_appoint = find_element('find first available date', driver, By.CLASS_NAME, 'src-containers-NewAppointment-PickType-TimeSelect-TimeSelect__availableForDateTitleTimeSelect___rK4Bf')
 first_avail_date = datetime.strptime(avail_appoint.text[-8:], '%d/%m/%y')
 
-avail_appoint_time_parent = find_element('find first available time', driver, By.CLASS_NAME, 'RoundButtonPicker-module__scrolable___V9aPR')
-avail_appoint_time = avail_appoint_time_parent.find_element(By.CSS_SELECTOR, 'button').text
-
+avail_appoint_time = find_element('find first available time', driver, By.CLASS_NAME, 'btn-outline-secondary').text
 first_avail_appoint = datetime.strptime(avail_appoint.text[-8:] + ' ' + avail_appoint_time, '%d/%m/%y %H:%M')
 
-if first_avail_appoint < cur_appoint:
+only_before_config = datetime.strptime(config['only_before'], '%d/%m/%y') if config.get('only_before') else cur_appoint
+threshold = min(only_before_config, cur_appoint)
+
+if first_avail_appoint < threshold:
     message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint}'
     logger.info(message)
     send_telegram_message(message=message)
 else:
-    message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint}'
+    message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint} (need before {threshold.strftime("%d/%m/%y")})'
     logger.info(message)
     #send_telegram_message(message=message)
 
