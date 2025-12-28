@@ -28,6 +28,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # CONSTANTS
 # =============================================================================
 NOTIFICATIONS_FILE = 'notifications.json'
+HEALTH_CHECK_FILE = 'health_check.json'
 LOG_FILE = 'maccabi.log'
 LOG_MAX_BYTES = 10 * 1_000_000  # 10 MB
 LOG_BACKUP_COUNT = 1
@@ -127,6 +128,75 @@ def mark_notified(cur_appoint, first_avail_appoint):
     first_key = first_avail_appoint.strftime('%Y-%m-%d %H:%M')
     notifications[cur_key] = first_key
     save_notifications(notifications)
+
+# =============================================================================
+# DAILY HEALTH CHECK
+# =============================================================================
+def load_health_check_state():
+    """Load health check state from file."""
+    if os.path.exists(HEALTH_CHECK_FILE):
+        with open(HEALTH_CHECK_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def save_health_check_state(state):
+    """Save health check state to file."""
+    with open(HEALTH_CHECK_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+
+def should_send_health_check():
+    """
+    Check if we should send a daily health check.
+    
+    Returns True if:
+    - Current time is past the configured health_check_hour
+    - We haven't sent a health check today after that hour
+    """
+    health_check_hour = config.get('health_check_hour')
+    if health_check_hour is None:
+        return False
+    
+    now = datetime.now()
+    today_check_time = now.replace(hour=health_check_hour, minute=0, second=0, microsecond=0)
+    
+    # Only send if we're past the configured hour
+    if now < today_check_time:
+        return False
+    
+    # Check if we already sent today after the health check hour
+    state = load_health_check_state()
+    last_sent_str = state.get('last_health_check')
+    
+    if last_sent_str:
+        last_sent = datetime.strptime(last_sent_str, '%Y-%m-%d %H:%M:%S')
+        # If last sent is today and after the health check hour, skip
+        if last_sent >= today_check_time:
+            return False
+    
+    return True
+
+
+def send_health_check():
+    """Send daily health check notification and record it."""
+    now = datetime.now()
+    message = f"🩺 Health check: Maccabi bot is running ({now.strftime('%d/%m/%Y %H:%M')})"
+    
+    logger.info("Sending daily health check")
+    send_telegram_message(message=message)
+    
+    state = load_health_check_state()
+    state['last_health_check'] = now.strftime('%Y-%m-%d %H:%M:%S')
+    save_health_check_state(state)
+
+
+def check_and_send_health_check():
+    """Check if health check is needed and send it."""
+    if should_send_health_check():
+        send_health_check()
+    else:
+        logger.debug("Health check not needed at this time")
 
 # =============================================================================
 # SELENIUM HELPERS
@@ -293,6 +363,9 @@ def check_for_earlier_appointment():
     n_mins = random.randint(0, config['max_minutes_wait'])
     logger.info('Waiting for %i minutes', n_mins)
     # time.sleep(n_mins * 60)
+
+    # Send daily health check if needed
+    check_and_send_health_check()
 
     patient_name = config['patient_name']
     patient_id = config['patient_id']

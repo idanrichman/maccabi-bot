@@ -4,6 +4,9 @@ delay_secs_long: 1 # seconds to wait between long actions
 max_minutes_wait: 5 # maximum minutes to wait before checking for appointments
 headless: true # run browser in headless mode
 
+# Health Check
+health_check_hour: 9  # hour of day (0-23) to send daily health check notification
+
 # Telegram
 chat_id: YOUR_TELEGRAM_CHAT_ID
 api_key: 'YOUR_TELEGRAM_BOT_API_KEY'

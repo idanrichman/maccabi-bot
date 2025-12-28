@@ -3,6 +3,7 @@ config.yaml
 
 # Notification state
 notifications.json
+health_check.json
 
 # Logs
 *.log
