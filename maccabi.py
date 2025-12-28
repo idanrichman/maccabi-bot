@@ -362,7 +362,7 @@ def check_for_earlier_appointment():
     # Random wait to avoid detection patterns
     n_mins = random.randint(0, config['max_minutes_wait'])
     logger.info('Waiting for %i minutes', n_mins)
-    # time.sleep(n_mins * 60)
+    time.sleep(n_mins * 60)
 
     # Send daily health check if needed
     check_and_send_health_check()
