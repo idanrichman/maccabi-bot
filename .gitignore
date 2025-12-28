@@ -1,0 +1,15 @@
+# Config with sensitive data (use config.example.yaml as template)
+config.yaml
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
