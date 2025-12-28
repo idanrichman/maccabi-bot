@@ -1,4 +1,5 @@
 import time
+import os
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -11,6 +12,8 @@ import yaml
 import logging
 from logging.handlers import RotatingFileHandler
 import random
+
+NOTIFICATIONS_FILE = 'notifications.json'
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -66,6 +69,37 @@ def send_telegram_message(message: str,
                                 proxies=proxies,
                                 verify=False)
     return response
+
+
+def load_notifications():
+    """Load sent notifications from file."""
+    if os.path.exists(NOTIFICATIONS_FILE):
+        with open(NOTIFICATIONS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def save_notifications(notifications):
+    """Save sent notifications to file."""
+    with open(NOTIFICATIONS_FILE, 'w') as f:
+        json.dump(notifications, f, indent=2)
+
+
+def was_notified(cur_appoint, first_avail_appoint):
+    """Check if we already notified about this first_avail for this cur_appoint."""
+    notifications = load_notifications()
+    cur_key = cur_appoint.strftime('%Y-%m-%d %H:%M')
+    first_key = first_avail_appoint.strftime('%Y-%m-%d %H:%M')
+    return notifications.get(cur_key) == first_key
+
+
+def mark_notified(cur_appoint, first_avail_appoint):
+    """Mark that we notified about this first_avail for this cur_appoint."""
+    notifications = load_notifications()
+    cur_key = cur_appoint.strftime('%Y-%m-%d %H:%M')
+    first_key = first_avail_appoint.strftime('%Y-%m-%d %H:%M')
+    notifications[cur_key] = first_key
+    save_notifications(notifications)
 
 
 def find_element(phase, driver, by, value):
@@ -186,13 +220,15 @@ only_before_config = datetime.strptime(config['only_before'], '%d/%m/%y') if con
 threshold = min(only_before_config, cur_appoint)
 
 if first_avail_appoint < threshold:
-    message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
-    logger.info(message)
-    send_telegram_message(message=message)
+    if was_notified(cur_appoint, first_avail_appoint):
+        logger.info(f'Earlier appointment found but already notified: {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}')
+    else:
+        message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
+        logger.info(message)
+        send_telegram_message(message=message)
+        mark_notified(cur_appoint, first_avail_appoint)
 else:
-    message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")} (need before {threshold.strftime("%d/%m/%y")})'
-    logger.info(message)
-    send_telegram_message(message=message)
+    logger.info(f'No earlier appointment for {patient_name} to {doctor_name}. First available: {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")} (need before {threshold.strftime("%d/%m/%y")})')
 
 # Close the browser
 driver.quit()
