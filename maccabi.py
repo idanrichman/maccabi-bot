@@ -1,76 +1,103 @@
-import time
+"""
+Maccabi Appointment Checker Bot
+
+Automatically checks for earlier available appointments on Maccabi4U
+and sends Telegram notifications when earlier slots are found.
+"""
+
+# =============================================================================
+# IMPORTS
+# =============================================================================
+import json
+import logging
 import os
+import random
+import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+
+import requests
+import yaml
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
-import requests
-import json
-import yaml
-import logging
-from logging.handlers import RotatingFileHandler
-import random
+from webdriver_manager.chrome import ChromeDriverManager
 
+# =============================================================================
+# CONSTANTS
+# =============================================================================
 NOTIFICATIONS_FILE = 'notifications.json'
+LOG_FILE = 'maccabi.log'
+LOG_MAX_BYTES = 10 * 1_000_000  # 10 MB
+LOG_BACKUP_COUNT = 1
+CONFIG_FILE = 'config.yaml'
 
-# Setup logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# =============================================================================
+# LOGGING SETUP
+# =============================================================================
+def setup_logger():
+    """Configure and return the application logger."""
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
 
-# File handler (DEBUG level)
-file_handler = RotatingFileHandler('maccabi.log', maxBytes=10*1e6, backupCount=1)
-file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s', 
-                                   datefmt="%Y-%m-%d %H:%M:%S")
-file_handler.setFormatter(file_formatter)
-logger.addHandler(file_handler)
+    log_format = '%(asctime)s - %(levelname)-8s - %(message)s'
+    date_format = '%Y-%m-%d %H:%M:%S'
 
-# Stdout handler (INFO level)
-stdout_handler = logging.StreamHandler()
-stdout_handler.setLevel(logging.INFO)
-stdout_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s', 
-                                     datefmt="%Y-%m-%d %H:%M:%S")
-stdout_handler.setFormatter(stdout_formatter)
-logger.addHandler(stdout_handler)
+    # File handler (DEBUG level)
+    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
+    logger.addHandler(file_handler)
 
-# Load config
-with open("config.yaml", 'r') as stream:
-    config = yaml.load(stream, yaml.SafeLoader)
+    # Stdout handler (INFO level)
+    stdout_handler = logging.StreamHandler()
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(logging.Formatter(log_format, datefmt=date_format))
+    logger.addHandler(stdout_handler)
 
-delay_secs_short = config['delay_secs_short']
-delay_secs_long = config['delay_secs_long']
-max_minutes_wait = config['max_minutes_wait']
+    return logger
 
-# random waiting
-n_mins = random.randint(0, max_minutes_wait)
-logger.info('Waiting for %i minutes', n_mins)
-# time.sleep(n_mins*60)
 
-# Define telegram helper
-def send_telegram_message(message: str,
-                          chat_id: str = config['chat_id'],
-                          api_key: str = config['api_key'],
-                        ):
+logger = setup_logger()
 
-    proxies = None
-    headers = {'Content-Type': 'application/json',
-                'Proxy-Authorization': 'Basic base64'}
-    data_dict = {'chat_id': chat_id,
-                    'text': message,
-                    'parse_mode': 'HTML',
-                    'disable_notification': True}
-    data = json.dumps(data_dict)
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+def load_config():
+    """Load configuration from YAML file."""
+    with open(CONFIG_FILE, 'r') as stream:
+        return yaml.load(stream, yaml.SafeLoader)
+
+
+config = load_config()
+
+# =============================================================================
+# TELEGRAM NOTIFICATIONS
+# =============================================================================
+def send_telegram_message(message: str, chat_id: str = None, api_key: str = None):
+    """Send a message via Telegram Bot API."""
+    chat_id = chat_id or config['chat_id']
+    api_key = api_key or config['api_key']
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Proxy-Authorization': 'Basic base64'
+    }
+    data = json.dumps({
+        'chat_id': chat_id,
+        'text': message,
+        'parse_mode': 'HTML',
+        'disable_notification': True
+    })
     url = f'https://api.telegram.org/bot{api_key}/sendMessage'
-    response = requests.post(url,
-                                data=data,
-                                headers=headers,
-                                proxies=proxies,
-                                verify=False)
+
+    response = requests.post(url, data=data, headers=headers, proxies=None, verify=False)
     return response
 
-
+# =============================================================================
+# NOTIFICATION PERSISTENCE
+# =============================================================================
 def load_notifications():
     """Load sent notifications from file."""
     if os.path.exists(NOTIFICATIONS_FILE):
@@ -101,134 +128,225 @@ def mark_notified(cur_appoint, first_avail_appoint):
     notifications[cur_key] = first_key
     save_notifications(notifications)
 
-
+# =============================================================================
+# SELENIUM HELPERS
+# =============================================================================
 def find_element(phase, driver, by, value):
-# Wrapper for driver.find_element
+    """Find element with error logging - raises if not found."""
     try:
-        element = driver.find_element(by, value)
+        return driver.find_element(by, value)
     except NoSuchElementException as e:
         logger.error("Failed finding element at phase %s. %s", phase, e.msg)
         raise
-    return element
 
 
 def optional_find_element(phase, driver, by, value):
-# Wrapper for driver.find_element, but won't raise error if not found
+    """Find element without raising - returns None if not found."""
     try:
-        element = driver.find_element(by, value)
-        return element
+        return driver.find_element(by, value)
     except NoSuchElementException as e:
         logger.debug("Failed finding element at phase %s. %s", phase, e.msg)
-    
-
-# Setup chrome driver
-chrome_options = webdriver.ChromeOptions()
-if config.get('headless', False):
-    chrome_options.add_argument('--headless')
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
-                          options=chrome_options)
-driver.implicitly_wait(time_to_wait=10)  # retry seconds when searching for elements
+        return None
 
 
-# Open the login page
-driver.get('https://online.maccabi4u.co.il/')
-time.sleep(delay_secs_short)
-username_field = find_element('login user_id field', driver, By.ID, 'idNumber')
-username_field.send_keys(config['user_id'])
-time.sleep(delay_secs_short)
-id_enter_button = find_element('id login continue button', driver, By.ID, 'chooseTypeBtn')
-driver.execute_script("arguments[0].click();", id_enter_button)
+def create_driver(headless=False):
+    """Create and configure Chrome WebDriver."""
+    chrome_options = webdriver.ChromeOptions()
+    if headless:
+        chrome_options.add_argument('--headless')
 
-time.sleep(delay_secs_short)
-password_login_btn = find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה')
-driver.execute_script("arguments[0].click();", password_login_btn)
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=chrome_options
+    )
+    driver.implicitly_wait(time_to_wait=10)
+    return driver
 
-# Find the username and password input fields and enter the login credentials
-time.sleep(delay_secs_short)
-username_field = find_element('login user_id field', driver, By.ID, 'idNumber2')
-username_field.send_keys(config['user_id'])
-password_field = find_element('login password field', driver, By.ID, 'password')
-password_field.send_keys(config['password'])
+# =============================================================================
+# LOGIN FLOW
+# =============================================================================
+def login(driver, user_id, password):
+    """Perform login to Maccabi4U."""
+    delay_short = config['delay_secs_short']
 
-# Find the login button and click it to log in
-time.sleep(delay_secs_short)
-login_button = find_element('password login continue button', driver, By.ID, 'enterWithPasswordBtn')
-driver.execute_script("arguments[0].click();", login_button)
+    driver.get('https://online.maccabi4u.co.il/')
+    time.sleep(delay_short)
+
+    # Enter user ID
+    username_field = find_element('login user_id field', driver, By.ID, 'idNumber')
+    username_field.send_keys(user_id)
+    time.sleep(delay_short)
+
+    # Click continue
+    id_enter_button = find_element('id login continue button', driver, By.ID, 'chooseTypeBtn')
+    driver.execute_script("arguments[0].click();", id_enter_button)
+    time.sleep(delay_short)
+
+    # Switch to password login
+    password_login_btn = find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה')
+    driver.execute_script("arguments[0].click();", password_login_btn)
+    time.sleep(delay_short)
+
+    # Enter credentials
+    username_field = find_element('login user_id field', driver, By.ID, 'idNumber2')
+    username_field.send_keys(user_id)
+    password_field = find_element('login password field', driver, By.ID, 'password')
+    password_field.send_keys(password)
+    time.sleep(delay_short)
+
+    # Submit login
+    login_button = find_element('password login continue button', driver, By.ID, 'enterWithPasswordBtn')
+    driver.execute_script("arguments[0].click();", login_button)
+
+# =============================================================================
+# APPOINTMENT NAVIGATION
+# =============================================================================
+def select_patient(driver, patient_id):
+    """Select the patient from the person picker."""
+    delay_short = config['delay_secs_short']
+    delay_long = config['delay_secs_long']
+
+    time.sleep(delay_long)
+    person_button = find_element('choose person button', driver, By.CLASS_NAME, 'me-lg-4')
+    driver.execute_script("arguments[0].click();", person_button)
+
+    time.sleep(delay_short)
+    person_by_id = find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]')
+    driver.execute_script("arguments[0].click();", person_by_id)
 
 
-# click the "choose person"
-time.sleep(delay_secs_long)
-person_button = find_element('choose person button', driver, By.CLASS_NAME, 'me-lg-4')
-driver.execute_script("arguments[0].click();", person_button)
+def navigate_to_doctor_appointments(driver, doctor_name):
+    """Navigate to future appointments for a specific doctor."""
+    delay_short = config['delay_secs_short']
+    delay_long = config['delay_secs_long']
 
-# click on the person itself by ID number
-time.sleep(delay_secs_short)
-patient_name = config['patient_name']
-patient_id = config['patient_id']
-person_by_id = find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]')
-driver.execute_script("arguments[0].click();", person_by_id)
+    time.sleep(delay_long)
+    future_appt_btn = find_element('future appointments button', driver, By.XPATH, '//a[contains(text(), "תורים עתידיים")]')
+    driver.execute_script("arguments[0].click();", future_appt_btn)
 
-time.sleep(delay_secs_long)
-future_appt_btn = find_element('future appointments button', driver, By.XPATH, '//a[contains(text(), "תורים עתידיים")]')
-driver.execute_script("arguments[0].click();", future_appt_btn)
-
-time.sleep(delay_secs_short)
-doctor_name = config['doctor_name']
-doctor_box = find_element('choose by doctor name', driver, By.XPATH, f'//div[@role="listitem" and .//a[contains(text(), "{doctor_name}")]]')
-driver.execute_script("arguments[0].click();", doctor_box)
-
-#check current appointment date
-time.sleep(delay_secs_long)
-cur_appoint_date = None
-cur_appoint_time = None
-for div in driver.find_elements(By.CLASS_NAME, 'src-components-FutureAppointments-AppointmentInfoDetails-AppointmentInfoDetails__text___ohiP1'):
-    if 'יום ' in div.text:
-        cur_appoint_date = div.text[-8:]
-    if 'שעה ' in div.text:
-        cur_appoint_time = div.text[-5:] 
-
-if (cur_appoint_date is None) | (cur_appoint_time is None):
-    logger.error("Couldn't find current appointment date or time") 
-    raise
-cur_appoint = datetime.strptime(cur_appoint_date+' '+cur_appoint_time, '%d/%m/%y %H:%M')
+    time.sleep(delay_short)
+    doctor_box = find_element('choose by doctor name', driver, By.XPATH, f'//div[@role="listitem" and .//a[contains(text(), "{doctor_name}")]]')
+    driver.execute_script("arguments[0].click();", doctor_box)
 
 
-time.sleep(delay_secs_long)
-edit_appt_btn = find_element('edit appointment button', driver, By.XPATH, '//button[text()="שינוי תור"]')
-driver.execute_script("arguments[0].click();", edit_appt_btn)
+def get_current_appointment(driver):
+    """Extract current appointment date and time."""
+    delay_long = config['delay_secs_long']
+    time.sleep(delay_long)
 
-time.sleep(delay_secs_long)
-regular_visit_button = optional_find_element('regular visit button', driver, By.XPATH, '//button[text()="ביקור רגיל"]')
-if regular_visit_button is not None:
-    driver.execute_script("arguments[0].click();", regular_visit_button)
+    cur_appoint_date = None
+    cur_appoint_time = None
 
-time.sleep(delay_secs_short)
-continue_button = optional_find_element('show available slots button', driver, By.XPATH, '//button[text()="המשך להצגת תורים פנויים"]')
-if continue_button is not None:
-    driver.execute_script("arguments[0].click();", continue_button)
+    appt_details_class = 'src-components-FutureAppointments-AppointmentInfoDetails-AppointmentInfoDetails__text___ohiP1'
+    for div in driver.find_elements(By.CLASS_NAME, appt_details_class):
+        if 'יום ' in div.text:
+            cur_appoint_date = div.text[-8:]
+        if 'שעה ' in div.text:
+            cur_appoint_time = div.text[-5:]
 
-    
-#check first available date
-time.sleep(delay_secs_long)
-avail_appoint = find_element('find first available date', driver, By.CLASS_NAME, 'src-containers-NewAppointment-PickType-TimeSelect-TimeSelect__availableForDateTitleTimeSelect___rK4Bf')
-first_avail_date = datetime.strptime(avail_appoint.text[-8:], '%d/%m/%y')
+    if cur_appoint_date is None or cur_appoint_time is None:
+        logger.error("Couldn't find current appointment date or time")
+        raise ValueError("Current appointment not found")
 
-avail_appoint_time = find_element('find first available time', driver, By.CLASS_NAME, 'btn-outline-secondary').text
-first_avail_appoint = datetime.strptime(avail_appoint.text[-8:] + ' ' + avail_appoint_time, '%d/%m/%y %H:%M')
+    return datetime.strptime(f'{cur_appoint_date} {cur_appoint_time}', '%d/%m/%y %H:%M')
 
-only_before_config = datetime.strptime(config['only_before'], '%d/%m/%y') if config.get('only_before') else cur_appoint
-threshold = min(only_before_config, cur_appoint)
 
-if first_avail_appoint < threshold:
-    if was_notified(cur_appoint, first_avail_appoint):
-        logger.info(f'Earlier appointment found but already notified: {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}')
-    else:
-        message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
-        logger.info(message)
-        send_telegram_message(message=message)
-        mark_notified(cur_appoint, first_avail_appoint)
-else:
-    logger.info(f'No earlier appointment for {patient_name} to {doctor_name}. First available: {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")} (need before {threshold.strftime("%d/%m/%y")})')
+def open_appointment_editor(driver):
+    """Open the appointment editor and prepare to see available slots."""
+    delay_short = config['delay_secs_short']
+    delay_long = config['delay_secs_long']
 
-# Close the browser
-driver.quit()
+    time.sleep(delay_long)
+    edit_appt_btn = find_element('edit appointment button', driver, By.XPATH, '//button[text()="שינוי תור"]')
+    driver.execute_script("arguments[0].click();", edit_appt_btn)
+
+    time.sleep(delay_long)
+    regular_visit_button = optional_find_element('regular visit button', driver, By.XPATH, '//button[text()="ביקור רגיל"]')
+    if regular_visit_button is not None:
+        driver.execute_script("arguments[0].click();", regular_visit_button)
+
+    time.sleep(delay_short)
+    continue_button = optional_find_element('show available slots button', driver, By.XPATH, '//button[text()="המשך להצגת תורים פנויים"]')
+    if continue_button is not None:
+        driver.execute_script("arguments[0].click();", continue_button)
+
+
+def get_first_available_appointment(driver):
+    """Get the first available appointment slot."""
+    delay_long = config['delay_secs_long']
+    time.sleep(delay_long)
+
+    date_class = 'src-containers-NewAppointment-PickType-TimeSelect-TimeSelect__availableForDateTitleTimeSelect___rK4Bf'
+    avail_appoint = find_element('find first available date', driver, By.CLASS_NAME, date_class)
+    first_avail_date = avail_appoint.text[-8:]
+
+    avail_appoint_time = find_element('find first available time', driver, By.CLASS_NAME, 'btn-outline-secondary').text
+
+    return datetime.strptime(f'{first_avail_date} {avail_appoint_time}', '%d/%m/%y %H:%M')
+
+# =============================================================================
+# MAIN LOGIC
+# =============================================================================
+def check_for_earlier_appointment():
+    """Main function to check for earlier appointments."""
+    # Random wait to avoid detection patterns
+    n_mins = random.randint(0, config['max_minutes_wait'])
+    logger.info('Waiting for %i minutes', n_mins)
+    # time.sleep(n_mins * 60)
+
+    patient_name = config['patient_name']
+    patient_id = config['patient_id']
+    doctor_name = config['doctor_name']
+
+    driver = create_driver(headless=config.get('headless', False))
+
+    try:
+        # Login and navigate
+        login(driver, config['user_id'], config['password'])
+        select_patient(driver, patient_id)
+        navigate_to_doctor_appointments(driver, doctor_name)
+
+        # Get current and available appointments
+        cur_appoint = get_current_appointment(driver)
+        open_appointment_editor(driver)
+        first_avail_appoint = get_first_available_appointment(driver)
+
+        # Determine threshold for notification
+        only_before_config = (
+            datetime.strptime(config['only_before'], '%d/%m/%y')
+            if config.get('only_before')
+            else cur_appoint
+        )
+        threshold = min(only_before_config, cur_appoint)
+
+        # Check if earlier appointment is available
+        if first_avail_appoint < threshold:
+            if was_notified(cur_appoint, first_avail_appoint):
+                logger.info(
+                    f'Earlier appointment found but already notified: '
+                    f'{first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
+                )
+            else:
+                message = (
+                    f'Yay, found earlier appointment for {patient_name}, '
+                    f'to {doctor_name} at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
+                )
+                logger.info(message)
+                send_telegram_message(message=message)
+                mark_notified(cur_appoint, first_avail_appoint)
+        else:
+            logger.info(
+                f'No earlier appointment for {patient_name} to {doctor_name}. '
+                f'First available: {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")} '
+                f'(need before {threshold.strftime("%d/%m/%y")})'
+            )
+
+    finally:
+        driver.quit()
+
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+if __name__ == '__main__':
+    check_for_earlier_appointment()
