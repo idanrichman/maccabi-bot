@@ -15,12 +15,22 @@ import random
 # Setup logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-handler = RotatingFileHandler('maccabi.log', maxBytes=10*1e6, backupCount=1)
-handler.setLevel(logging.DEBUG)
+
+# File handler (DEBUG level)
+file_handler = RotatingFileHandler('maccabi.log', maxBytes=10*1e6, backupCount=1)
+file_handler.setLevel(logging.DEBUG)
 file_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s', 
                                    datefmt="%Y-%m-%d %H:%M:%S")
-handler.setFormatter(file_formatter)
-logger.addHandler(handler)
+file_handler.setFormatter(file_formatter)
+logger.addHandler(file_handler)
+
+# Stdout handler (INFO level)
+stdout_handler = logging.StreamHandler()
+stdout_handler.setLevel(logging.INFO)
+stdout_formatter = logging.Formatter('%(asctime)s - %(levelname)-8s - %(message)s', 
+                                     datefmt="%Y-%m-%d %H:%M:%S")
+stdout_handler.setFormatter(stdout_formatter)
+logger.addHandler(stdout_handler)
 
 # Load config
 with open("config.yaml", 'r') as stream:
@@ -33,7 +43,7 @@ max_minutes_wait = config['max_minutes_wait']
 # random waiting
 n_mins = random.randint(0, max_minutes_wait)
 logger.info('Waiting for %i minutes', n_mins)
-time.sleep(n_mins*60)
+# time.sleep(n_mins*60)
 
 # Define telegram helper
 def send_telegram_message(message: str,
@@ -79,7 +89,8 @@ def optional_find_element(phase, driver, by, value):
 
 # Setup chrome driver
 chrome_options = webdriver.ChromeOptions()
-chrome_options.headless = False
+if config.get('headless', False):
+    chrome_options.add_argument('--headless')
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
                           options=chrome_options)
 driver.implicitly_wait(time_to_wait=10)  # retry seconds when searching for elements
@@ -92,10 +103,11 @@ username_field = find_element('login user_id field', driver, By.ID, 'idNumber')
 username_field.send_keys(config['user_id'])
 time.sleep(delay_secs_short)
 id_enter_button = find_element('id login continue button', driver, By.ID, 'chooseTypeBtn')
-id_enter_button.click()
+driver.execute_script("arguments[0].click();", id_enter_button)
 
 time.sleep(delay_secs_short)
-find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה').click()
+password_login_btn = find_element('login password button', driver, By.LINK_TEXT, 'כניסה עם סיסמה')
+driver.execute_script("arguments[0].click();", password_login_btn)
 
 # Find the username and password input fields and enter the login credentials
 time.sleep(delay_secs_short)
@@ -107,18 +119,20 @@ password_field.send_keys(config['password'])
 # Find the login button and click it to log in
 time.sleep(delay_secs_short)
 login_button = find_element('password login continue button', driver, By.ID, 'enterWithPasswordBtn')
-login_button.click()
+driver.execute_script("arguments[0].click();", login_button)
 
 
 # click the "choose person"
 time.sleep(delay_secs_long)
-find_element('choose person button', driver, By.CLASS_NAME, 'me-lg-4').click()
+person_button = find_element('choose person button', driver, By.CLASS_NAME, 'me-lg-4')
+driver.execute_script("arguments[0].click();", person_button)
 
 # click on the person itself by ID number
 time.sleep(delay_secs_short)
 patient_name = config['patient_name']
 patient_id = config['patient_id']
-find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]').click()
+person_by_id = find_element('choose person by ID', driver, By.XPATH, f'//div[text()="{patient_id}"]')
+driver.execute_script("arguments[0].click();", person_by_id)
 
 time.sleep(delay_secs_long)
 future_appt_btn = find_element('future appointments button', driver, By.XPATH, '//a[contains(text(), "תורים עתידיים")]')
@@ -146,17 +160,18 @@ cur_appoint = datetime.strptime(cur_appoint_date+' '+cur_appoint_time, '%d/%m/%y
 
 
 time.sleep(delay_secs_long)
-find_element('edit appointment button', driver, By.XPATH, '//button[text()="שינוי תור"]').click()
+edit_appt_btn = find_element('edit appointment button', driver, By.XPATH, '//button[text()="שינוי תור"]')
+driver.execute_script("arguments[0].click();", edit_appt_btn)
 
 time.sleep(delay_secs_long)
 regular_visit_button = optional_find_element('regular visit button', driver, By.XPATH, '//button[text()="ביקור רגיל"]')
 if regular_visit_button is not None:
-    regular_visit_button.click()
+    driver.execute_script("arguments[0].click();", regular_visit_button)
 
 time.sleep(delay_secs_short)
 continue_button = optional_find_element('show available slots button', driver, By.XPATH, '//button[text()="המשך להצגת תורים פנויים"]')
 if continue_button is not None:
-    continue_button.click()
+    driver.execute_script("arguments[0].click();", continue_button)
 
     
 #check first available date
@@ -171,13 +186,13 @@ only_before_config = datetime.strptime(config['only_before'], '%d/%m/%y') if con
 threshold = min(only_before_config, cur_appoint)
 
 if first_avail_appoint < threshold:
-    message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint}'
+    message=f'Yay, found earlier appointment for {patient_name}, to {doctor_name} at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")}'
     logger.info(message)
     send_telegram_message(message=message)
 else:
-    message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint} (need before {threshold.strftime("%d/%m/%y")})'
+    message=f'too bad, no earlier appointment for {patient_name} to {doctor_name}. first available appointment is at {first_avail_appoint.strftime("%a %d-%m-%Y %H:%M")} (need before {threshold.strftime("%d/%m/%y")})'
     logger.info(message)
-    #send_telegram_message(message=message)
+    send_telegram_message(message=message)
 
 # Close the browser
 driver.quit()
