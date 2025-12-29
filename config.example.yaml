@@ -15,9 +15,14 @@ api_key: 'YOUR_TELEGRAM_BOT_API_KEY'
 user_id: 'YOUR_MACCABI_USER_ID'
 password: 'YOUR_MACCABI_PASSWORD'
 
-# Appointment Details
-patient_name: 'PATIENT_NAME'
-patient_id: 'PATIENT_ID_NUMBER'
-doctor_name: 'DOCTOR_NAME'
-only_before: '01/01/26'  # only notify if available appointment is before this date (DD/MM/YY)
-
+# Appointment Details (list of appointments to check)
+appointments:
+  - patient_name: 'PATIENT_NAME'
+    patient_id: 'PATIENT_ID_NUMBER'
+    doctor_name: 'DOCTOR_NAME'
+    only_before: '01/01/26'  # only notify if available appointment is before this date (DD/MM/YY)
+  # Add more appointments below:
+  # - patient_name: 'ANOTHER_PATIENT'
+  #   patient_id: 'ANOTHER_ID'
+  #   doctor_name: 'ANOTHER_DOCTOR'
+  #   only_before: '01/06/26'

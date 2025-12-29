@@ -21,7 +21,9 @@ import yaml
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 
 # =============================================================================
@@ -219,6 +221,42 @@ def optional_find_element(phase, driver, by, value):
         return None
 
 
+def wait_for_loading_complete(driver, timeout=20):
+    """Wait for the loading indicator to disappear, with a maximum timeout.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        timeout: Maximum seconds to wait (default 20)
+    
+    Returns:
+        True if loading completed, False if timeout reached
+    """
+    # Use CSS selector with partial class match (class contains 'ldsEllipsis')
+    loader_selector = '[class*="ldsEllipsis"]'
+    
+    try:
+        # First, wait briefly for the loader to appear (it may take a moment)
+        WebDriverWait(driver, 2).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, loader_selector))
+        )
+        logger.debug("Loader appeared, waiting for it to disappear")
+    except TimeoutException:
+        # Loader didn't appear within 2 seconds - page might already be loaded
+        logger.debug("Loader not detected, assuming page is already loaded")
+        return True
+    
+    try:
+        # Now wait for the loader to disappear
+        WebDriverWait(driver, timeout).until(
+            EC.invisibility_of_element_located((By.CSS_SELECTOR, loader_selector))
+        )
+        logger.debug("Loading complete")
+        return True
+    except TimeoutException:
+        logger.warning(f"Loading wait timed out after {timeout} seconds, continuing anyway")
+        return False
+
+
 def create_driver(headless=False):
     """Create and configure Chrome WebDriver."""
     chrome_options = webdriver.ChromeOptions()
@@ -285,18 +323,60 @@ def select_patient(driver, patient_id):
     driver.execute_script("arguments[0].click();", person_by_id)
 
 
-def navigate_to_doctor_appointments(driver, doctor_name):
-    """Navigate to future appointments for a specific doctor."""
-    delay_short = config['delay_secs_short']
+def navigate_to_future_appointments(driver):
+    """Navigate to the future appointments list."""
     delay_long = config['delay_secs_long']
+    delay_short = config['delay_secs_short']
 
     time.sleep(delay_long)
     future_appt_btn = find_element('future appointments button', driver, By.XPATH, '//a[contains(text(), "תורים עתידיים")]')
     driver.execute_script("arguments[0].click();", future_appt_btn)
 
+    # Handle "exit without saving" modal if it appears (when leaving appointment editor)
     time.sleep(delay_short)
-    doctor_box = find_element('choose by doctor name', driver, By.XPATH, f'//div[@role="listitem" and .//a[contains(text(), "{doctor_name}")]]')
+    exit_modal_btn = optional_find_element(
+        'exit without saving button',
+        driver,
+        By.XPATH,
+        '//button[contains(text(), "לצאת ללא שמירה")]'
+    )
+    if exit_modal_btn is not None:
+        logger.debug("Exit modal appeared, clicking 'exit without saving'")
+        driver.execute_script("arguments[0].click();", exit_modal_btn)
+
+
+def select_doctor_appointment(driver, doctor_name):
+    """Select a specific doctor's appointment from the list."""
+    # Wait for page loading to complete (max 20 seconds)
+    wait_for_loading_complete(driver, timeout=20)
+    
+    delay_short = config['delay_secs_short']
+    time.sleep(delay_short)
+    
+    doctor_box = optional_find_element('choose by doctor name', driver, By.XPATH, f"//div[@role='listitem' and .//a[contains(text(), '{doctor_name}')]]")
+    
+    if doctor_box is None:
+        # Get all available doctor names to show in error message
+        doctor_link_class = 'src-components-FutureAppointments-FutureAppointmentsTimeLine-FutureAppointmentsTimeLine__providerLinkDoctor___cLd_C'
+        available_doctors = driver.find_elements(By.CLASS_NAME, doctor_link_class)
+        available_names = [doc.text for doc in available_doctors if doc.text]
+        
+        error_msg = f"Could not find doctor '{doctor_name}'."
+        if available_names:
+            error_msg += f" Available options: {', '.join(available_names)}"
+        else:
+            error_msg += " No available appointments found."
+        
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
     driver.execute_script("arguments[0].click();", doctor_box)
+
+
+def navigate_to_doctor_appointments(driver, doctor_name):
+    """Navigate to future appointments for a specific doctor."""
+    navigate_to_future_appointments(driver)
+    select_doctor_appointment(driver, doctor_name)
 
 
 def get_current_appointment(driver):
@@ -357,27 +437,30 @@ def get_first_available_appointment(driver):
 # =============================================================================
 # MAIN LOGIC
 # =============================================================================
-def check_for_earlier_appointment():
-    """Main function to check for earlier appointments."""
-    # Random wait to avoid detection patterns
-    n_mins = random.randint(0, config['max_minutes_wait'])
-    logger.info('Waiting for %i minutes', n_mins)
-    time.sleep(n_mins * 60)
+def check_single_appointment(driver, appointment, is_first=True):
+    """Check a single appointment for earlier availability.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        appointment: Dict with patient_name, patient_id, doctor_name, only_before
+        is_first: Whether this is the first appointment being checked (affects navigation)
+    """
+    patient_name = appointment['patient_name']
+    patient_id = appointment['patient_id']
+    doctor_name = appointment['doctor_name']
+    only_before = appointment.get('only_before')
 
-    # Send daily health check if needed
-    check_and_send_health_check()
-
-    patient_name = config['patient_name']
-    patient_id = config['patient_id']
-    doctor_name = config['doctor_name']
-
-    driver = create_driver(headless=config.get('headless', False))
+    logger.info(f'Checking appointment for {patient_name} with {doctor_name}')
 
     try:
-        # Login and navigate
-        login(driver, config['user_id'], config['password'])
-        select_patient(driver, patient_id)
-        navigate_to_doctor_appointments(driver, doctor_name)
+        if is_first:
+            # First appointment: select patient and navigate to future appointments
+            select_patient(driver, patient_id)
+            navigate_to_doctor_appointments(driver, doctor_name)
+        else:
+            # Subsequent appointments: navigate back to future appointments list first
+            navigate_to_future_appointments(driver)
+            select_doctor_appointment(driver, doctor_name)
 
         # Get current and available appointments
         cur_appoint = get_current_appointment(driver)
@@ -386,8 +469,8 @@ def check_for_earlier_appointment():
 
         # Determine threshold for notification
         only_before_config = (
-            datetime.strptime(config['only_before'], '%d/%m/%y')
-            if config.get('only_before')
+            datetime.strptime(only_before, '%d/%m/%y')
+            if only_before
             else cur_appoint
         )
         threshold = min(only_before_config, cur_appoint)
@@ -414,6 +497,41 @@ def check_for_earlier_appointment():
                 f'(need before {threshold.strftime("%d/%m/%y")})'
             )
 
+    except Exception as e:
+        logger.error(f'Error checking appointment for {patient_name} with {doctor_name}: {e}')
+        raise
+
+
+def check_for_earlier_appointment():
+    """Main function to check for earlier appointments."""
+    # Random wait to avoid detection patterns
+    n_mins = random.randint(0, config['max_minutes_wait'])
+    logger.info('Waiting for %i minutes', n_mins)
+    # time.sleep(n_mins * 60)
+
+    appointments = config.get('appointments', [])
+    if not appointments:
+        logger.error('No appointments configured in config.yaml')
+        return
+
+    logger.info(f'Found {len(appointments)} appointment(s) to check')
+
+    driver = create_driver(headless=config.get('headless', False))
+
+    try:
+        # Login once
+        login(driver, config['user_id'], config['password'])
+
+        # Check each appointment
+        for i, appointment in enumerate(appointments):
+            is_first = (i == 0)
+            check_single_appointment(driver, appointment, is_first=is_first)
+
+    except Exception:
+        raise
+    else:
+        # Send daily health check - only if everything succeeded
+        check_and_send_health_check()
     finally:
         driver.quit()
 
