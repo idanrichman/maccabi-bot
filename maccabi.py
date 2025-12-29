@@ -348,7 +348,7 @@ def navigate_to_future_appointments(driver):
 def select_doctor_appointment(driver, doctor_name):
     """Select a specific doctor's appointment from the list."""
     # Wait for page loading to complete (max 20 seconds)
-    wait_for_loading_complete(driver, timeout=20)
+    # wait_for_loading_complete(driver, timeout=20)
     
     delay_short = config['delay_secs_short']
     time.sleep(delay_short)
@@ -367,6 +367,7 @@ def select_doctor_appointment(driver, doctor_name):
         else:
             error_msg += " No available appointments found."
         
+        send_telegram_message(error_msg)
         logger.error(error_msg)
         raise ValueError(error_msg)
     
@@ -507,7 +508,7 @@ def check_for_earlier_appointment():
     # Random wait to avoid detection patterns
     n_mins = random.randint(0, config['max_minutes_wait'])
     logger.info('Waiting for %i minutes', n_mins)
-    # time.sleep(n_mins * 60)
+    time.sleep(n_mins * 60)
 
     appointments = config.get('appointments', [])
     if not appointments:
