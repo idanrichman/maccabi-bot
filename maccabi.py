@@ -78,7 +78,7 @@ config = load_config()
 # =============================================================================
 # TELEGRAM NOTIFICATIONS
 # =============================================================================
-def send_telegram_message(message: str, chat_id: str = None, api_key: str = None):
+def send_telegram_message(message: str, chat_id: str = None, api_key: str = None, disable_notification: bool = False):
     """Send a message via Telegram Bot API."""
     chat_id = chat_id or config['chat_id']
     api_key = api_key or config['api_key']
@@ -91,7 +91,7 @@ def send_telegram_message(message: str, chat_id: str = None, api_key: str = None
         'chat_id': chat_id,
         'text': message,
         'parse_mode': 'HTML',
-        'disable_notification': True
+        'disable_notification': disable_notification
     })
     url = f'https://api.telegram.org/bot{api_key}/sendMessage'
 
