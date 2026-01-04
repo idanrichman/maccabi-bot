@@ -186,7 +186,7 @@ def send_health_check():
     message = f"🩺 Health check: Maccabi bot is running ({now.strftime('%d/%m/%Y %H:%M')})"
     
     logger.info("Sending daily health check")
-    send_telegram_message(message=message)
+    send_telegram_message(message=message, disable_notification=True)
     
     state = load_health_check_state()
     state['last_health_check'] = now.strftime('%Y-%m-%d %H:%M:%S')
@@ -365,9 +365,9 @@ def select_doctor_appointment(driver, doctor_name):
         if available_names:
             error_msg += f" Available options: {', '.join(available_names)}"
         else:
-            error_msg += " No available appointments found."
+            error_msg += " Could not find the available options."
         
-        send_telegram_message(error_msg)
+        send_telegram_message(error_msg, disable_notification=True)
         logger.error(error_msg)
         raise ValueError(error_msg)
     
