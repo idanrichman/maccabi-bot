@@ -31,6 +31,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # =============================================================================
 NOTIFICATIONS_FILE = 'notifications.json'
 HEALTH_CHECK_FILE = 'health_check.json'
+NO_SLOTS_FILE = 'no_slots_notifications.json'
 LOG_FILE = 'maccabi.log'
 LOG_MAX_BYTES = 10 * 1_000_000  # 10 MB
 LOG_BACKUP_COUNT = 1
@@ -201,6 +202,61 @@ def check_and_send_health_check():
         logger.debug("Health check not needed at this time")
 
 # =============================================================================
+# NO SLOTS NOTIFICATION (ONCE A DAY)
+# =============================================================================
+def load_no_slots_state():
+    """Load no slots notification state from file."""
+    if os.path.exists(NO_SLOTS_FILE):
+        with open(NO_SLOTS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def was_no_slots_notified_today(doctor_name):
+    """Check if we already notified about no slots for this doctor today."""
+    state = load_no_slots_state()
+    last_sent_str = state.get(doctor_name)
+    
+    if last_sent_str:
+        last_sent = datetime.strptime(last_sent_str, '%Y-%m-%d')
+        today = datetime.now().date()
+        if last_sent.date() == today:
+            return True
+    return False
+
+
+def mark_no_slots_notified(doctor_name):
+    """Mark that we notified about no slots for this doctor today."""
+    state = load_no_slots_state()
+    state[doctor_name] = datetime.now().strftime('%Y-%m-%d')
+    with open(NO_SLOTS_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+
+def check_no_slots_available(driver, doctor_name):
+    """Check if there are no available slots and notify once a day.
+    
+    Returns:
+        True if no slots are available, False otherwise.
+    """
+    no_appt_element = optional_find_element(
+        'no appointments message',
+        driver,
+        By.XPATH,
+        '//*[contains(text(), "אין תורים זמינים לסוג ביקור זה")]'
+    )
+    if no_appt_element is not None:
+        message = f"Could not find available slots for '{doctor_name}'. אין תורים זמינים לסוג ביקור זה"
+        if was_no_slots_notified_today(doctor_name):
+            logger.info(f"No slots available for {doctor_name}, but already notified today")
+        else:
+            logger.warning(message)
+            send_telegram_message(message=message)
+            mark_no_slots_notified(doctor_name)
+        return True
+    return False
+
+# =============================================================================
 # SELENIUM HELPERS
 # =============================================================================
 def find_element(phase, driver, by, value):
@@ -350,8 +406,8 @@ def select_doctor_appointment(driver, doctor_name):
     # Wait for page loading to complete (max 20 seconds)
     # wait_for_loading_complete(driver, timeout=20)
     
-    delay_short = config['delay_secs_short']
-    time.sleep(delay_short)
+    delay_long = config['delay_secs_long']
+    time.sleep(delay_long)
     
     doctor_box = optional_find_element('choose by doctor name', driver, By.XPATH, f"//div[@role='listitem' and .//a[contains(text(), '{doctor_name}')]]")
     
@@ -466,6 +522,11 @@ def check_single_appointment(driver, appointment, is_first=True):
         # Get current and available appointments
         cur_appoint = get_current_appointment(driver)
         open_appointment_editor(driver)
+
+        # Check if there are no available slots at all
+        if check_no_slots_available(driver, doctor_name):
+            return
+
         first_avail_appoint = get_first_available_appointment(driver)
 
         # Determine threshold for notification
