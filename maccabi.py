@@ -494,13 +494,14 @@ def get_first_available_appointment(driver):
 # =============================================================================
 # MAIN LOGIC
 # =============================================================================
-def check_single_appointment(driver, appointment, is_first=True):
+def check_single_appointment(driver, appointment, is_first=True, prev_patient_id=None):
     """Check a single appointment for earlier availability.
     
     Args:
         driver: Selenium WebDriver instance
         appointment: Dict with patient_name, patient_id, doctor_name, only_before
         is_first: Whether this is the first appointment being checked (affects navigation)
+        prev_patient_id: The patient_id of the previously checked appointment (for patient switching)
     """
     patient_name = appointment['patient_name']
     patient_id = appointment['patient_id']
@@ -515,8 +516,11 @@ def check_single_appointment(driver, appointment, is_first=True):
             select_patient(driver, patient_id)
             navigate_to_doctor_appointments(driver, doctor_name)
         else:
-            # Subsequent appointments: navigate back to future appointments list first
+            # Subsequent appointments: navigate back first, then switch patient if needed
             navigate_to_future_appointments(driver)
+            if patient_id != prev_patient_id:
+                logger.info(f'Switching patient from {prev_patient_id} to {patient_id}')
+                select_patient(driver, patient_id)
             select_doctor_appointment(driver, doctor_name)
 
         # Get current and available appointments
@@ -585,9 +589,11 @@ def check_for_earlier_appointment():
         login(driver, config['user_id'], config['password'])
 
         # Check each appointment
+        prev_patient_id = None
         for i, appointment in enumerate(appointments):
             is_first = (i == 0)
-            check_single_appointment(driver, appointment, is_first=is_first)
+            check_single_appointment(driver, appointment, is_first=is_first, prev_patient_id=prev_patient_id)
+            prev_patient_id = appointment['patient_id']
 
     except Exception:
         raise

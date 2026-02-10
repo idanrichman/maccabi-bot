@@ -4,6 +4,7 @@ config.yaml
 # Notification state
 notifications.json
 health_check.json
+no_slots_notifications.json
 
 # Logs
 *.log
